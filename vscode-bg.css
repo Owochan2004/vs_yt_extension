@@ -1,0 +1,52 @@
+/* === ZONA SUPERIOR: EDITOR DE CÓDIGO === */
+.part.editor {
+    position: relative !important;
+}
+
+#yt-stream-bg {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important;
+    z-index: 0 !important;
+    pointer-events: none !important;
+    transition: opacity 0.4s ease;
+}
+
+.part.editor > *:not(#yt-stream-bg),
+.monaco-grid-view,
+.editor-group-container,
+.editor-instance,
+.monaco-editor,
+.monaco-editor-background,
+.monaco-editor .margin,
+.monaco-editor .overflow-guard {
+    background: transparent !important;
+    background-color: transparent !important;
+    z-index: 1 !important;
+}
+
+.monaco-editor .view-lines,
+.monaco-editor .cursor {
+    z-index: 10 !important;
+}
+
+/* === ZONA INFERIOR: TERMINAL Y VISUALIZADOR === */
+.part.panel,
+.part.panel .content,
+.terminal-outer-container,
+.terminal-wrapper,
+.xterm,
+.xterm-viewport,
+.xterm-screen {
+    background: transparent !important;
+    background-color: transparent !important;
+    position: relative;
+}
+
+.xterm-rows {
+    z-index: 5 !important;
+    position: relative;
+}
