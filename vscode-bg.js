@@ -15,28 +15,43 @@
     const colorCtx = colorCanvas.getContext('2d', { willReadFrequently: true });
     let neonColor = { r: 0, g: 255, b: 200 };
 
-    // Variables de control de vibración (Tus valores personalizados)
+    // Control de vibración (Tus valores exactos)
     let lastBass = 0;
     let kickCooldown = 0;
     let shakeOffset = 0;
     let activeGlowElements = [];
 
-    // Inyector de estilos: Capas + Cursor Grueso + Sin barra negra + Resaltado
+    // Inyector de estilos: Bordeado de letras + Cursor grueso + Resaltado
     function injectCustomStyles() {
         if (document.getElementById('yt-custom-styles-fix')) return;
         const style = document.createElement('style');
         style.id = 'yt-custom-styles-fix';
         style.innerHTML = `
-            .xterm-screen, .xterm-rows {
+            /* 1. TEXTO DE LA TERMINAL SIEMPRE AL FRENTE CON BORDE NEGRO 360° */
+            .xterm-screen {
                 position: relative !important;
-                z-index: 5 !important;
+                z-index: 3 !important;
+            }
+
+            .xterm-rows {
+                position: relative !important;
+                z-index: 4 !important;
+                font-weight: 600 !important;
+                /* Borde negro de 1px alrededor de cada letra para máxima legibilidad */
+                text-shadow: 
+                    -1px -1px 0 #000,  
+                     1px -1px 0 #000,
+                    -1px  1px 0 #000,
+                     1px  1px 0 #000,
+                     0 0 3px #000,
+                     0 2px 4px rgba(0, 0, 0, 0.95) !important;
             }
 
             .xterm-selection {
-                z-index: 4 !important;
+                z-index: 5 !important;
             }
 
-            /* 1. ELIMINAR LA FRANJA NEGRA QUE TAPA TODA LA LÍNEA DEL CURSOR */
+            /* 2. ELIMINAR LA FRANJA NEGRA DE LA LÍNEA DEL CURSOR */
             .monaco-editor .current-line,
             .monaco-editor .view-overlays .current-line,
             .monaco-editor .current-line-margin {
@@ -45,15 +60,15 @@
                 border: none !important;
             }
 
-            /* 2. HACER LA RAYITA DEL CURSOR MÁS GRUESA Y CON RESPLANDOR NEÓN */
+            /* 3. CURSOR GRUESO CON RESPLANDOR NEÓN */
             .monaco-editor .cursor {
-                width: 3.5px !important; /* Puedes subirlo a 4px o 5px si la quieres más gruesa */
+                width: 3.5px !important;
                 background-color: var(--yt-sel-border, #ffffff) !important;
                 box-shadow: 0 0 8px var(--yt-sel-border, rgba(255, 255, 255, 0.7)) !important;
                 border-radius: 2px !important;
             }
 
-            /* 3. Resaltado en el EDITOR NORMAL */
+            /* 4. Resaltado en el EDITOR */
             .monaco-editor .selected-text,
             .monaco-editor .focused .selected-text {
                 background-color: var(--yt-sel-bg, rgba(255, 255, 255, 0.35)) !important;
@@ -68,7 +83,7 @@
                 outline: 1px dashed var(--yt-sel-border, rgba(255, 255, 255, 0.5)) !important;
             }
 
-            /* 4. Resaltado en la TERMINAL (IDÉNTICO AL EDITOR) */
+            /* 5. Resaltado en la TERMINAL */
             .xterm .xterm-selection div,
             .xterm-selection div,
             .terminal .xterm-selection div,
@@ -108,20 +123,20 @@
         }
 
         initWS();
-        setupTerminalCanvas();
+        attachTerminalCanvas();
     }
 
-    function setupTerminalCanvas() {
-        const wrapper = document.querySelector('.terminal-wrapper') || 
-                        document.querySelector('.terminal-outer-container') || 
-                        document.querySelector('.part.panel');
-
-        if (!wrapper) {
-            setTimeout(setupTerminalCanvas, 400);
+    // Enganche garantizado: Inserta el Canvas DENTRO de xterm, justo ANTES de xterm-screen
+    function attachTerminalCanvas() {
+        const screen = document.querySelector('.terminal-wrapper .xterm-screen') || document.querySelector('.xterm-screen');
+        
+        if (!screen || !screen.parentElement) {
+            setTimeout(attachTerminalCanvas, 200);
             return;
         }
 
-        canvas = document.getElementById('terminal-audio-vis');
+        const xterm = screen.parentElement;
+
         if (!canvas) {
             canvas = document.createElement('canvas');
             canvas.id = 'terminal-audio-vis';
@@ -131,23 +146,26 @@
             canvas.style.width = '100%';
             canvas.style.height = '100%';
             canvas.style.pointerEvents = 'none';
-            canvas.style.zIndex = '2';
+            canvas.style.zIndex = '1'; // Detrás de xterm-screen (zIndex: 3)
             canvas.style.opacity = '0.90';
             ctx = canvas.getContext('2d');
         }
 
-        if (canvas.parentElement !== wrapper) {
-            wrapper.style.position = 'relative';
-            wrapper.appendChild(canvas);
+        // Colocar el Canvas directamente debajo de la pantalla de texto
+        if (canvas.parentElement !== xterm) {
+            xterm.style.position = 'relative';
+            xterm.insertBefore(canvas, screen);
         }
 
         const resize = () => {
-            if (wrapper.clientWidth > 0 && wrapper.clientHeight > 0) {
-                canvas.width = wrapper.clientWidth;
-                canvas.height = wrapper.clientHeight;
+            if (xterm.clientWidth > 0 && xterm.clientHeight > 0) {
+                if (canvas.width !== xterm.clientWidth || canvas.height !== xterm.clientHeight) {
+                    canvas.width = xterm.clientWidth;
+                    canvas.height = xterm.clientHeight;
+                }
             }
         };
-        new ResizeObserver(resize).observe(wrapper);
+        new ResizeObserver(resize).observe(xterm);
         resize();
     }
 
@@ -206,7 +224,7 @@
             } catch(e) {}
         }
 
-        // Control de vibración suave (TUS VALORES EXACTOS CONSERVADOS)
+        // Control de vibración suave (TUS VALORES EXACTOS)
         if (kickCooldown > 0) {
             kickCooldown--;
             if (kickCooldown <= 2) shakeOffset = 0;
@@ -283,6 +301,12 @@
 
         if (!ctx || !canvas || !video || video.readyState < 2) return;
 
+        // Asegurar periódicamente que el canvas no se haya desenganchado al abrir/cerrar terminales
+        const screen = document.querySelector('.terminal-wrapper .xterm-screen') || document.querySelector('.xterm-screen');
+        if (screen && screen.parentElement && canvas.parentElement !== screen.parentElement) {
+            attachTerminalCanvas();
+        }
+
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         const SENSITIVITY = 1.10;   
@@ -293,7 +317,7 @@
         const blockHeight = 4;      
         const blockGap = 2;         
         const centerX = canvas.width / 2;
-        const maxHeight = canvas.height * 0.78;
+        const maxHeight = canvas.height * 0.9; // Sube alto
 
         ctx.save();
         ctx.beginPath();
