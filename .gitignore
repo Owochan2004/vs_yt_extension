@@ -1,0 +1,18 @@
+# Dependencias
+node_modules/
+
+# Archivos de empaquetado (los .vsix van en Releases de GitHub, no en el repositorio)
+*.vsix
+.vscode-test/
+
+# Logs del sistema y npm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Archivos temporales del sistema operativo
+.DS_Store
+Thumbs.db
+
+# Configuraciones locales que no quieres compartir
+.env

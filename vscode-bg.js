@@ -1,4 +1,7 @@
 (function () {
+    // CERRADURA: Si ya hay una copia corriendo en esta ventana, salir inmediatamente
+    if (window.__YT_BG_ACTIVE__) return;
+    window.__YT_BG_ACTIVE__ = true;
     const WS_URL = 'ws://localhost:9999';
     let ws, pc, video;
     let candidateQueue = [];
@@ -228,7 +231,7 @@
         if (kickCooldown > 0) {
             kickCooldown--;
             if (kickCooldown <= 2) shakeOffset = 0;
-        } else if (rawBass > 150 && (rawBass - lastBass > 11)) {
+        } else if (rawBass > 150 && (rawBass - lastBass > 10)) {
             shakeOffset = 1.5;
             kickCooldown = 5;
         }
