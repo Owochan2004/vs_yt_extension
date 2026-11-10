@@ -4,7 +4,7 @@ Una extensión para Visual Studio Code que transmite en tiempo real cualquier vi
 
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Owochan2004/vs_yt_extension/main/assets/preview.png" alt="Demostración de la extensión" width="100%">
+  <img src="https://raw.githubusercontent.com/Owochan2004/vs_yt_extension/main/assets/preview.png?v=2" alt="Demostración de la extensión" width="100%">
 </p>
 
 ---

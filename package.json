@@ -4,6 +4,11 @@
   "description": "Fondo y visualizador de YouTube sincronizado en tiempo real",
   "version": "1.0.0",
   "publisher": "jhonr",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Owochan2004/vs_yt_extension"
+  },
   "engines": {
     "vscode": "^1.75.0"
   },
