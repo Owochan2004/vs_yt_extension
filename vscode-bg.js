@@ -317,7 +317,7 @@
         const blockHeight = 4;      
         const blockGap = 2;         
         const centerX = canvas.width / 2;
-        const maxHeight = canvas.height * 0.9; // Sube alto
+        const maxHeight = canvas.height * 0.98; // Sube alto
 
         ctx.save();
         ctx.beginPath();
