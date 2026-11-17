@@ -18,12 +18,13 @@
     const colorCtx = colorCanvas.getContext('2d', { willReadFrequently: true });
     let neonColor = { r: 0, g: 255, b: 200 };
 
-    // Control de vibración (Tus valores exactos)
-    let lastBass = 0;
+    // 2. Variables de control de ritmo (reemplazan lastBass / kickCooldown / shakeOffset)
+    let bassHistory = new Float32Array(25).fill(0); // ~0.4s de historial
+    let historyIdx = 0;
     let kickCooldown = 0;
     let shakeOffset = 0;
 
-    // OPTIMIZACIÓN: Cache de archivos abiertos (no consultar DOM 60 veces/seg)
+    // Cache de archivos abiertos
     let cachedOpenRows = [];
     let lastDomScan = 0;
 
@@ -32,6 +33,25 @@
         const style = document.createElement('style');
         style.id = 'yt-custom-styles-fix';
         style.innerHTML = `
+            /* ======================================================== */
+            /* 1. MÁXIMA LEGIBILIDAD DEL CÓDIGO (TIPO SUBTÍTULO CINE)    */
+            /* ======================================================== */
+            .monaco-editor .view-lines {
+                font-weight: 500 !important; /* Letras con más cuerpo cromático */
+                /* Micro-borde negro de 360° para despegar las letras del fondo */
+                text-shadow: 
+                    0 1px 2px rgba(0, 0, 0, 0.95),
+                    0 0 2px #000,
+                    -1px 0 1px #000,
+                     1px 0 1px #000 !important;
+            }
+
+            /* Velo "lentes de sol": apaga los blancos del video tras el código sin quitar transparencia */
+            .monaco-editor .overflow-guard {
+                background-color: rgba(12, 12, 16, 0.28) !important;
+            }
+
+            /* 2. TEXTO DE LA TERMINAL */
             .xterm-screen {
                 position: relative !important;
                 z-index: 3 !important;
@@ -54,6 +74,7 @@
                 z-index: 5 !important;
             }
 
+            /* 3. ELIMINAR LA FRANJA NEGRA DE LA LÍNEA DEL CURSOR */
             .monaco-editor .current-line,
             .monaco-editor .view-overlays .current-line,
             .monaco-editor .current-line-margin {
@@ -62,6 +83,7 @@
                 border: none !important;
             }
 
+            /* 4. CURSOR GRUESO CON RESPLANDOR NEÓN */
             .monaco-editor .cursor {
                 width: 3.5px !important;
                 background-color: var(--yt-sel-border, #ffffff) !important;
@@ -69,6 +91,7 @@
                 border-radius: 2px !important;
             }
 
+            /* 5. SELECCIÓN CON MOUSE (EDITOR) */
             .monaco-editor .selected-text,
             .monaco-editor .focused .selected-text {
                 background-color: var(--yt-sel-bg, rgba(255, 255, 255, 0.35)) !important;
@@ -83,6 +106,45 @@
                 outline: 1px dashed var(--yt-sel-border, rgba(255, 255, 255, 0.5)) !important;
             }
 
+            /* 6. COINCIDENCIAS DE CTRL + F EN EL CÓDIGO */
+            .monaco-editor .findMatch,
+            .monaco-editor .currentFindMatch {
+                background-color: var(--yt-sel-bg, rgba(255, 255, 255, 0.38)) !important;
+                outline: 1.5px solid var(--yt-sel-border, #ffffff) !important;
+                outline-offset: -1px;
+                box-shadow: 0 0 10px var(--yt-sel-border, rgba(255, 255, 255, 0.8)) !important;
+                border-radius: 2px !important;
+            }
+
+            .monaco-editor .findMatchHighlight {
+                background-color: var(--yt-sel-bg, rgba(255, 255, 255, 0.18)) !important;
+                outline: 1px dashed var(--yt-sel-border, rgba(255, 255, 255, 0.6)) !important;
+                border-radius: 2px !important;
+            }
+
+            /* 7. DENTRO DE LA CAJA DE BÚSQUEDA CTRL + F (INPUT) */
+            .find-widget .monaco-inputbox input::selection,
+            .find-widget .monaco-inputbox textarea::selection,
+            .find-widget input::selection,
+            .find-widget textarea::selection {
+                background-color: var(--yt-sel-border, rgba(255, 255, 255, 0.55)) !important;
+                color: #ffffff !important;
+                text-shadow: 0 0 8px var(--yt-sel-border, #ffffff), 0 0 2px #fff !important;
+            }
+
+            .find-widget .monaco-inputbox.synthetic-focus,
+            .find-widget .monaco-inputbox:focus-within {
+                outline: 1.5px solid var(--yt-sel-border, #ffffff) !important;
+                outline-offset: -1px !important;
+                box-shadow: 0 0 10px var(--yt-sel-border, rgba(255, 255, 255, 0.7)) !important;
+            }
+
+            .find-widget .monaco-inputbox {
+                background-color: rgba(18, 18, 18, 0.70) !important;
+                border-radius: 3px !important;
+            }
+
+            /* 8. SELECCIÓN EN LA TERMINAL */
             .xterm .xterm-selection div,
             .xterm-selection div,
             .terminal .xterm-selection div,
@@ -118,6 +180,8 @@
             video.muted = true;
             video.playsInline = true;
             video.style.opacity = '0';
+            // Ligero ajuste de brillo al video para evitar deslumbramientos en escenas blancas
+            video.style.filter = 'brightness(0.90) contrast(1.05)';
             editor.prepend(video);
         }
 
@@ -167,11 +231,12 @@
 
     function setupAudio(stream) {
         try {
+            // 1. En setupAudio: mayor resolución en graves y menos suavizado para ataques rápidos
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 analyser = audioCtx.createAnalyser();
-                analyser.fftSize = 128;
-                analyser.smoothingTimeConstant = 0.72;
+                analyser.fftSize = 1024; // Cada bin = ~46.8 Hz (bin 1..3 = 46Hz - 140Hz)
+                analyser.smoothingTimeConstant = 0.40; // Reacciona rápido tras silencios
                 dataArray = new Uint8Array(analyser.frequencyBinCount);
             }
 
@@ -190,7 +255,6 @@
         } catch(e) {}
     }
 
-    // OPTIMIZACIÓN: Solo buscar archivos en el DOM cada 1 segundo
     function updateOpenTabsCache() {
         const now = performance.now();
         if (now - lastDomScan < 1000) return;
@@ -207,7 +271,6 @@
             if (label && openNames.has(label.textContent.trim())) {
                 nextActive.push({ row, label });
             } else if (row.style.borderLeft) {
-                // Limpieza inmediata si se cerró
                 label.style.color = '';
                 label.style.fontWeight = '';
                 label.style.textShadow = '';
@@ -224,7 +287,6 @@
     function updateExplorerNeon(bassPulse, rawBass) {
         frameCount++;
 
-        // Muestrear color solo cada 10 frames
         if (frameCount % 10 === 0 && video && video.readyState >= 2) {
             try {
                 colorCtx.drawImage(video, 0, 0, 1, 1);
@@ -245,10 +307,12 @@
                 document.documentElement.style.setProperty('--yt-sel-bg', `rgba(${invR}, ${invG}, ${invB}, 0.38)`);
                 document.documentElement.style.setProperty('--yt-sel-border', `rgb(${invR}, ${invG}, ${invB})`);
                 document.documentElement.style.setProperty('--vscode-terminal-selectionBackground', `rgba(${invR}, ${invG}, ${invB}, 0.38)`);
+                document.documentElement.style.setProperty('--vscode-editor-findMatchBackground', `rgba(${invR}, ${invG}, ${invB}, 0.40)`);
+                document.documentElement.style.setProperty('--vscode-editor-findMatchBorder', `rgb(${invR}, ${invG}, ${invB})`);
             } catch(e) {}
         }
 
-        // Tus valores exactos conservados
+        // Tus valores exactos de vibración conservados
         if (kickCooldown > 0) {
             kickCooldown--;
             if (kickCooldown <= 2) shakeOffset = 0;
@@ -267,7 +331,6 @@
 
         updateOpenTabsCache();
 
-        // Aplicar estilos únicamente a los nodos cacheados (Cero sobrecarga de CPU)
         for (let i = 0; i < cachedOpenRows.length; i++) {
             const { row, label } = cachedOpenRows[i];
             const glowPx = Math.round(bassPulse * 12);
@@ -286,9 +349,8 @@
         }
     }
 
-    // OPTIMIZACIÓN: Limitar el renderizado a 35 FPS (Ahorro del 60% de GPU/RAM)
     let lastRenderTime = 0;
-    const FRAME_INTERVAL = 1000 / 35; // ~28.5 ms entre frames
+    const FRAME_INTERVAL = 1000 / 35;
 
     function drawLoop(timestamp) {
         requestAnimationFrame(drawLoop);
@@ -312,7 +374,7 @@
         }
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        
+
         const SENSITIVITY = 1.10;   
         const NOISE_FLOOR = 30;     
         const numBarsPerSide = 24;  
@@ -369,7 +431,6 @@
             const data = JSON.parse(e.data);
 
             if (data.type === 'offer') {
-                // OPTIMIZACIÓN: Liberar pistas anteriores en VS Code
                 if (video && video.srcObject) {
                     try { video.srcObject.getTracks().forEach(t => t.stop()); } catch(e) {}
                     video.srcObject = null;
