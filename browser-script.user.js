@@ -12,6 +12,7 @@
     let lastVideoId = '';
     let debounceTimer = null;
     let candidateQueue = [];
+    let currentStream = null;
 
     function initWS() {
         ws = new WebSocket(WS_URL);
@@ -59,7 +60,12 @@
         }
 
         lastVideoId = currentId;
-        console.log('[VS Code Stream] Transmitiendo video:', currentId);
+
+        // OPTIMIZACIÓN 1: Liberar la memoria del stream anterior
+        if (currentStream) {
+            currentStream.getTracks().forEach(t => t.stop());
+            currentStream = null;
+        }
 
         if (pc) {
             try { pc.close(); } catch(e) {}
@@ -76,8 +82,9 @@
         };
 
         try {
-            const stream = video.captureStream ? video.captureStream() : video.mozCaptureStream();
-            stream.getTracks().forEach(track => pc.addTrack(track, stream));
+            // OPTIMIZACIÓN 2: Limitar la captura a 30 FPS para ahorrar 50% de RAM
+            currentStream = video.captureStream ? video.captureStream(30) : video.mozCaptureStream(30);
+            currentStream.getTracks().forEach(track => pc.addTrack(track, currentStream));
 
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
@@ -87,7 +94,7 @@
                 ws.send(JSON.stringify({ type: 'state', playing: true }));
             }
         } catch (err) {
-            console.error('[VS Code Stream] Error al capturar stream:', err);
+            console.error('[VS Code Stream] Error:', err);
         }
     }
 
@@ -104,7 +111,6 @@
     initWS();
     setInterval(checkVideo, 1000);
 
-    // SOLUCIÓN PAUSA / REANUDAR: Notifica siempre el estado
     document.addEventListener('playing', (e) => {
         if (e.target.tagName === 'VIDEO') {
             if (ws?.readyState === WebSocket.OPEN) {

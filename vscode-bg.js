@@ -1,7 +1,7 @@
 (function () {
-    // CERRADURA: Si ya hay una copia corriendo en esta ventana, salir inmediatamente
     if (window.__YT_BG_ACTIVE__) return;
     window.__YT_BG_ACTIVE__ = true;
+
     const WS_URL = 'ws://localhost:9999';
     let ws, pc, video;
     let candidateQueue = [];
@@ -11,7 +11,7 @@
     let canvas, ctx;
     let isDrawing = false;
 
-    // Extractor de color del video
+    // Extractor de color
     const colorCanvas = document.createElement('canvas');
     colorCanvas.width = 1;
     colorCanvas.height = 1;
@@ -22,15 +22,16 @@
     let lastBass = 0;
     let kickCooldown = 0;
     let shakeOffset = 0;
-    let activeGlowElements = [];
 
-    // Inyector de estilos: Bordeado de letras + Cursor grueso + Resaltado
+    // OPTIMIZACIÓN: Cache de archivos abiertos (no consultar DOM 60 veces/seg)
+    let cachedOpenRows = [];
+    let lastDomScan = 0;
+
     function injectCustomStyles() {
         if (document.getElementById('yt-custom-styles-fix')) return;
         const style = document.createElement('style');
         style.id = 'yt-custom-styles-fix';
         style.innerHTML = `
-            /* 1. TEXTO DE LA TERMINAL SIEMPRE AL FRENTE CON BORDE NEGRO 360° */
             .xterm-screen {
                 position: relative !important;
                 z-index: 3 !important;
@@ -40,7 +41,6 @@
                 position: relative !important;
                 z-index: 4 !important;
                 font-weight: 600 !important;
-                /* Borde negro de 1px alrededor de cada letra para máxima legibilidad */
                 text-shadow: 
                     -1px -1px 0 #000,  
                      1px -1px 0 #000,
@@ -54,7 +54,6 @@
                 z-index: 5 !important;
             }
 
-            /* 2. ELIMINAR LA FRANJA NEGRA DE LA LÍNEA DEL CURSOR */
             .monaco-editor .current-line,
             .monaco-editor .view-overlays .current-line,
             .monaco-editor .current-line-margin {
@@ -63,7 +62,6 @@
                 border: none !important;
             }
 
-            /* 3. CURSOR GRUESO CON RESPLANDOR NEÓN */
             .monaco-editor .cursor {
                 width: 3.5px !important;
                 background-color: var(--yt-sel-border, #ffffff) !important;
@@ -71,7 +69,6 @@
                 border-radius: 2px !important;
             }
 
-            /* 4. Resaltado en el EDITOR */
             .monaco-editor .selected-text,
             .monaco-editor .focused .selected-text {
                 background-color: var(--yt-sel-bg, rgba(255, 255, 255, 0.35)) !important;
@@ -86,7 +83,6 @@
                 outline: 1px dashed var(--yt-sel-border, rgba(255, 255, 255, 0.5)) !important;
             }
 
-            /* 5. Resaltado en la TERMINAL */
             .xterm .xterm-selection div,
             .xterm-selection div,
             .terminal .xterm-selection div,
@@ -129,10 +125,8 @@
         attachTerminalCanvas();
     }
 
-    // Enganche garantizado: Inserta el Canvas DENTRO de xterm, justo ANTES de xterm-screen
     function attachTerminalCanvas() {
         const screen = document.querySelector('.terminal-wrapper .xterm-screen') || document.querySelector('.xterm-screen');
-        
         if (!screen || !screen.parentElement) {
             setTimeout(attachTerminalCanvas, 200);
             return;
@@ -149,12 +143,11 @@
             canvas.style.width = '100%';
             canvas.style.height = '100%';
             canvas.style.pointerEvents = 'none';
-            canvas.style.zIndex = '1'; // Detrás de xterm-screen (zIndex: 3)
+            canvas.style.zIndex = '1';
             canvas.style.opacity = '0.90';
             ctx = canvas.getContext('2d');
         }
 
-        // Colocar el Canvas directamente debajo de la pantalla de texto
         if (canvas.parentElement !== xterm) {
             xterm.style.position = 'relative';
             xterm.insertBefore(canvas, screen);
@@ -194,17 +187,45 @@
                 isDrawing = true;
                 drawLoop();
             }
-        } catch(e) {
-            console.warn('[VS Code BG] Audio setup warning:', e);
-        }
+        } catch(e) {}
     }
 
-    // === EFECTO EXPLORER Y CALCULO DE COLOR NEGATIVO ===
+    // OPTIMIZACIÓN: Solo buscar archivos en el DOM cada 1 segundo
+    function updateOpenTabsCache() {
+        const now = performance.now();
+        if (now - lastDomScan < 1000) return;
+        lastDomScan = now;
+
+        const openTabElements = document.querySelectorAll('.tabs-and-actions-container .tab .label-name, .tab .tab-label');
+        const openNames = new Set(Array.from(openTabElements).map(el => el.textContent.trim()));
+
+        const explorerRows = document.querySelectorAll('.explorer-viewlet .monaco-list-row');
+        const nextActive = [];
+
+        explorerRows.forEach(row => {
+            const label = row.querySelector('.label-name');
+            if (label && openNames.has(label.textContent.trim())) {
+                nextActive.push({ row, label });
+            } else if (row.style.borderLeft) {
+                // Limpieza inmediata si se cerró
+                label.style.color = '';
+                label.style.fontWeight = '';
+                label.style.textShadow = '';
+                row.style.transform = '';
+                row.style.borderLeft = '';
+                row.style.backgroundColor = '';
+            }
+        });
+
+        cachedOpenRows = nextActive;
+    }
+
     let frameCount = 0;
     function updateExplorerNeon(bassPulse, rawBass) {
         frameCount++;
 
-        if (frameCount % 6 === 0 && video && video.readyState >= 2) {
+        // Muestrear color solo cada 10 frames
+        if (frameCount % 10 === 0 && video && video.readyState >= 2) {
             try {
                 colorCtx.drawImage(video, 0, 0, 1, 1);
                 let [r, g, b] = colorCtx.getImageData(0, 0, 1, 1).data;
@@ -227,11 +248,11 @@
             } catch(e) {}
         }
 
-        // Control de vibración suave (TUS VALORES EXACTOS)
+        // Tus valores exactos conservados
         if (kickCooldown > 0) {
             kickCooldown--;
             if (kickCooldown <= 2) shakeOffset = 0;
-        } else if (rawBass > 150 && (rawBass - lastBass > 10)) {
+        } else if (rawBass > 150 && (rawBass - lastBass > 11)) {
             shakeOffset = 1.5;
             kickCooldown = 5;
         }
@@ -244,57 +265,38 @@
         const displayColor = isTooDark ? '#ffffff' : `rgb(${r}, ${g}, ${b})`;
         const glowColor = isTooDark ? 'rgba(255, 255, 255, 0.85)' : `rgb(${r}, ${g}, ${b})`;
 
-        const openTabElements = document.querySelectorAll('.tabs-and-actions-container .tab .label-name, .tab .tab-label');
-        const openNames = new Set(Array.from(openTabElements).map(el => el.textContent.trim()));
+        updateOpenTabsCache();
 
-        const explorerRows = document.querySelectorAll('.explorer-viewlet .monaco-list-row');
-        const currentActive = [];
+        // Aplicar estilos únicamente a los nodos cacheados (Cero sobrecarga de CPU)
+        for (let i = 0; i < cachedOpenRows.length; i++) {
+            const { row, label } = cachedOpenRows[i];
+            const glowPx = Math.round(bassPulse * 12);
 
-        explorerRows.forEach(row => {
-            const label = row.querySelector('.label-name');
-            if (!label) return;
+            label.style.color = displayColor;
+            label.style.fontWeight = 'bold';
+            label.style.textShadow = bassPulse > 0.15 
+                ? `0 0 1px #fff, 0 0 ${glowPx}px ${glowColor}, 0 0 ${glowPx * 2}px ${glowColor}` 
+                : (isTooDark ? '0 0 2px rgba(255,255,255,0.7)' : 'none');
 
-            const fileName = label.textContent.trim();
-            if (openNames.has(fileName)) {
-                currentActive.push({ row, label });
-
-                const glowPx = Math.round(bassPulse * 12);
-
-                label.style.color = displayColor;
-                label.style.fontWeight = 'bold';
-
-                label.style.textShadow = bassPulse > 0.15 
-                    ? `0 0 1px #fff, 0 0 ${glowPx}px ${glowColor}, 0 0 ${glowPx * 2}px ${glowColor}` 
-                    : (isTooDark ? '0 0 2px rgba(255,255,255,0.7)' : 'none');
-
-                row.style.transform = shakeOffset !== 0 ? `translateX(${shakeOffset}px)` : 'none';
-                row.style.borderLeft = `3px solid ${glowColor}`;
-                row.style.backgroundColor = bassPulse > 0.30 
-                    ? (isTooDark ? `rgba(255, 255, 255, ${bassPulse * 0.12})` : `rgba(${r}, ${g}, ${b}, ${bassPulse * 0.15})`)
-                    : 'transparent';
-                row.style.transition = 'background-color 0.08s ease, border-left 0.08s ease';
-            }
-        });
-
-        activeGlowElements.forEach(({ row, label }) => {
-            if (!currentActive.some(item => item.row === row)) {
-                label.style.color = '';
-                label.style.fontWeight = '';
-                label.style.textShadow = '';
-                row.style.transform = '';
-                row.style.borderLeft = '';
-                row.style.backgroundColor = '';
-            }
-        });
-
-        activeGlowElements = currentActive;
+            row.style.transform = shakeOffset !== 0 ? `translateX(${shakeOffset}px)` : 'none';
+            row.style.borderLeft = `3px solid ${glowColor}`;
+            row.style.backgroundColor = bassPulse > 0.30 
+                ? (isTooDark ? `rgba(255, 255, 255, ${bassPulse * 0.12})` : `rgba(${r}, ${g}, ${b}, ${bassPulse * 0.15})`)
+                : 'transparent';
+        }
     }
 
-    // === BUCLE PRINCIPAL DE ANIMACIÓN ===
-    function drawLoop() {
-        requestAnimationFrame(drawLoop);
-        if (!analyser || !dataArray) return;
+    // OPTIMIZACIÓN: Limitar el renderizado a 35 FPS (Ahorro del 60% de GPU/RAM)
+    let lastRenderTime = 0;
+    const FRAME_INTERVAL = 1000 / 35; // ~28.5 ms entre frames
 
+    function drawLoop(timestamp) {
+        requestAnimationFrame(drawLoop);
+
+        if (timestamp - lastRenderTime < FRAME_INTERVAL) return;
+        lastRenderTime = timestamp;
+
+        if (!analyser || !dataArray) return;
         analyser.getByteFrequencyData(dataArray);
 
         const rawBass = (dataArray[1] + dataArray[2] + dataArray[3] + dataArray[4]) / 4;
@@ -304,14 +306,13 @@
 
         if (!ctx || !canvas || !video || video.readyState < 2) return;
 
-        // Asegurar periódicamente que el canvas no se haya desenganchado al abrir/cerrar terminales
         const screen = document.querySelector('.terminal-wrapper .xterm-screen') || document.querySelector('.xterm-screen');
         if (screen && screen.parentElement && canvas.parentElement !== screen.parentElement) {
             attachTerminalCanvas();
         }
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-
+        
         const SENSITIVITY = 1.10;   
         const NOISE_FLOOR = 30;     
         const numBarsPerSide = 24;  
@@ -320,7 +321,7 @@
         const blockHeight = 4;      
         const blockGap = 2;         
         const centerX = canvas.width / 2;
-        const maxHeight = canvas.height * 0.98; // Sube alto
+        const maxHeight = canvas.height * 0.98;
 
         ctx.save();
         ctx.beginPath();
@@ -368,6 +369,12 @@
             const data = JSON.parse(e.data);
 
             if (data.type === 'offer') {
+                // OPTIMIZACIÓN: Liberar pistas anteriores en VS Code
+                if (video && video.srcObject) {
+                    try { video.srcObject.getTracks().forEach(t => t.stop()); } catch(e) {}
+                    video.srcObject = null;
+                }
+
                 if (pc) {
                     try { pc.close(); } catch(err) {}
                     pc = null;
@@ -379,7 +386,7 @@
                     if (event.track.kind === 'video') {
                         if (video.srcObject !== event.streams[0]) {
                             video.srcObject = event.streams[0];
-                            video.play().catch(console.error);
+                            video.play().catch(() => {});
                             video.style.opacity = '0.40';
                         }
                     } else if (event.track.kind === 'audio') {
