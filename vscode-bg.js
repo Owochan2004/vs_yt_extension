@@ -18,8 +18,8 @@
     const colorCtx = colorCanvas.getContext('2d', { willReadFrequently: true });
     let neonColor = { r: 0, g: 255, b: 200 };
 
-    // 2. Variables de control de ritmo (reemplazan lastBass / kickCooldown / shakeOffset)
-    let bassHistory = new Float32Array(25).fill(0); // ~0.4s de historial
+    // Control de ritmo conservado
+    let bassHistory = new Float32Array(25).fill(0);
     let historyIdx = 0;
     let kickCooldown = 0;
     let shakeOffset = 0;
@@ -27,6 +27,10 @@
     // Cache de archivos abiertos
     let cachedOpenRows = [];
     let lastDomScan = 0;
+
+    // Observer para la terminal activa
+    let terminalResizeObserver = null;
+    let lastTermCheck = 0;
 
     function injectCustomStyles() {
         if (document.getElementById('yt-custom-styles-fix')) return;
@@ -37,8 +41,7 @@
             /* 1. MÁXIMA LEGIBILIDAD DEL CÓDIGO (TIPO SUBTÍTULO CINE)    */
             /* ======================================================== */
             .monaco-editor .view-lines {
-                font-weight: 500 !important; /* Letras con más cuerpo cromático */
-                /* Micro-borde negro de 360° para despegar las letras del fondo */
+                font-weight: 500 !important;
                 text-shadow: 
                     0 1px 2px rgba(0, 0, 0, 0.95),
                     0 0 2px #000,
@@ -46,21 +49,16 @@
                      1px 0 1px #000 !important;
             }
 
-            /* Velo "lentes de sol": apaga los blancos del video tras el código sin quitar transparencia */
             .monaco-editor .overflow-guard {
                 background-color: rgba(12, 12, 16, 0.28) !important;
             }
 
-            /* 2. TEXTO DE LA TERMINAL */
-            .xterm-screen {
-                position: relative !important;
-                z-index: 3 !important;
-            }
-
+            /* ======================================================== */
+            /* 2. TEXTO DE LA TERMINAL (NÍTIDO Y CON SCROLL NATIVO)     */
+            /* ======================================================== */
             .xterm-rows {
-                position: relative !important;
-                z-index: 4 !important;
                 font-weight: 600 !important;
+                /* Borde negro perimetral para máxima lectura sobre el video */
                 text-shadow: 
                     -1px -1px 0 #000,  
                      1px -1px 0 #000,
@@ -68,10 +66,6 @@
                      1px  1px 0 #000,
                      0 0 3px #000,
                      0 2px 4px rgba(0, 0, 0, 0.95) !important;
-            }
-
-            .xterm-selection {
-                z-index: 5 !important;
             }
 
             /* 3. ELIMINAR LA FRANJA NEGRA DE LA LÍNEA DEL CURSOR */
@@ -180,7 +174,6 @@
             video.muted = true;
             video.playsInline = true;
             video.style.opacity = '0';
-            // Ligero ajuste de brillo al video para evitar deslumbramientos en escenas blancas
             video.style.filter = 'brightness(0.90) contrast(1.05)';
             editor.prepend(video);
         }
@@ -189,8 +182,22 @@
         attachTerminalCanvas();
     }
 
+    function getActiveTerminalScreen() {
+        const screens = document.querySelectorAll('.terminal-wrapper .xterm-screen, .xterm .xterm-screen');
+        for (let i = 0; i < screens.length; i++) {
+            const s = screens[i];
+            if (s.offsetParent !== null && s.clientWidth > 0 && s.clientHeight > 0) {
+                return s;
+            }
+        }
+        for (let i = 0; i < screens.length; i++) {
+            if (screens[i].offsetParent !== null) return screens[i];
+        }
+        return screens[0] || null;
+    }
+
     function attachTerminalCanvas() {
-        const screen = document.querySelector('.terminal-wrapper .xterm-screen') || document.querySelector('.xterm-screen');
+        const screen = getActiveTerminalScreen();
         if (!screen || !screen.parentElement) {
             setTimeout(attachTerminalCanvas, 200);
             return;
@@ -207,36 +214,41 @@
             canvas.style.width = '100%';
             canvas.style.height = '100%';
             canvas.style.pointerEvents = 'none';
-            canvas.style.zIndex = '1';
             canvas.style.opacity = '0.90';
             ctx = canvas.getContext('2d');
         }
 
+        // Al insertarlo ANTES de screen, el navegador dibuja el texto por encima sin romper eventos
         if (canvas.parentElement !== xterm) {
-            xterm.style.position = 'relative';
             xterm.insertBefore(canvas, screen);
         }
 
-        const resize = () => {
-            if (xterm.clientWidth > 0 && xterm.clientHeight > 0) {
-                if (canvas.width !== xterm.clientWidth || canvas.height !== xterm.clientHeight) {
-                    canvas.width = xterm.clientWidth;
-                    canvas.height = xterm.clientHeight;
-                }
+        if (xterm.clientWidth > 0 && xterm.clientHeight > 0) {
+            if (canvas.width !== xterm.clientWidth || canvas.height !== xterm.clientHeight) {
+                canvas.width = xterm.clientWidth;
+                canvas.height = xterm.clientHeight;
             }
-        };
-        new ResizeObserver(resize).observe(xterm);
-        resize();
+        }
+
+        if (terminalResizeObserver) {
+            terminalResizeObserver.disconnect();
+        }
+        terminalResizeObserver = new ResizeObserver(() => {
+            if (xterm.clientWidth > 0 && xterm.clientHeight > 0) {
+                canvas.width = xterm.clientWidth;
+                canvas.height = xterm.clientHeight;
+            }
+        });
+        terminalResizeObserver.observe(xterm);
     }
 
     function setupAudio(stream) {
         try {
-            // 1. En setupAudio: mayor resolución en graves y menos suavizado para ataques rápidos
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 analyser = audioCtx.createAnalyser();
-                analyser.fftSize = 1024; // Cada bin = ~46.8 Hz (bin 1..3 = 46Hz - 140Hz)
-                analyser.smoothingTimeConstant = 0.40; // Reacciona rápido tras silencios
+                analyser.fftSize = 1024;
+                analyser.smoothingTimeConstant = 0.40;
                 dataArray = new Uint8Array(analyser.frequencyBinCount);
             }
 
@@ -368,9 +380,13 @@
 
         if (!ctx || !canvas || !video || video.readyState < 2) return;
 
-        const screen = document.querySelector('.terminal-wrapper .xterm-screen') || document.querySelector('.xterm-screen');
-        if (screen && screen.parentElement && canvas.parentElement !== screen.parentElement) {
-            attachTerminalCanvas();
+        const nowMs = performance.now();
+        if (nowMs - lastTermCheck > 300 || (canvas && (!canvas.parentElement || canvas.parentElement.offsetParent === null))) {
+            lastTermCheck = nowMs;
+            const activeScreen = getActiveTerminalScreen();
+            if (activeScreen && activeScreen.parentElement && canvas.parentElement !== activeScreen.parentElement) {
+                attachTerminalCanvas();
+            }
         }
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);

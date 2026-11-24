@@ -1,6 +1,7 @@
 // ==UserScript==
 // @name         YouTube Streamer to VS Code
 // @match        https://www.youtube.com/*
+// @match        https://music.youtube.com/*
 // @grant        none
 // ==/UserScript==
 
@@ -17,12 +18,21 @@
     function initWS() {
         ws = new WebSocket(WS_URL);
 
-        ws.onopen = () => console.log('[VS Code Stream] Conectado al puente.');
+        // AL CONECTARSE: Si ya hay un video sonando en YouTube, transmitir de inmediato a VS Code
+        ws.onopen = () => {
+            console.log('[VS Code Stream] Conectado al puente.');
+            const video = document.querySelector('video');
+            if (video && !video.paused && video.readyState >= 2) {
+                console.log('[VS Code Stream] Video en curso detectado al conectar. Enviando a VS Code...');
+                triggerStream(true);
+            }
+        };
 
         ws.onmessage = async (e) => {
             const data = JSON.parse(e.data);
 
             if (data.type === 'ready') {
+                console.log('[VS Code Stream] VS Code solicitó transmisión.');
                 triggerStream(true);
             } else if (data.type === 'answer') {
                 if (pc) {
@@ -41,19 +51,20 @@
             }
         };
 
-        ws.onclose = () => setTimeout(initWS, 3000);
+        // Reintento rápido cada 1.5s para vincularse de inmediato al abrir VS Code
+        ws.onclose = () => setTimeout(initWS, 1500);
     }
 
     function triggerStream(force = false) {
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
             startStreaming(force);
-        }, 600);
+        }, 400);
     }
 
     async function startStreaming(force = false) {
         const video = document.querySelector('video');
-        const currentId = new URLSearchParams(location.search).get('v');
+        const currentId = new URLSearchParams(location.search).get('v') || location.pathname;
 
         if (!video || video.readyState < 2 || (!force && currentId === lastVideoId)) {
             return;
@@ -61,7 +72,7 @@
 
         lastVideoId = currentId;
 
-        // OPTIMIZACIÓN 1: Liberar la memoria del stream anterior
+        // Liberar pistas anteriores de memoria RAM
         if (currentStream) {
             currentStream.getTracks().forEach(t => t.stop());
             currentStream = null;
@@ -82,7 +93,7 @@
         };
 
         try {
-            // OPTIMIZACIÓN 2: Limitar la captura a 30 FPS para ahorrar 50% de RAM
+            // Captura a 30 FPS optimizada
             currentStream = video.captureStream ? video.captureStream(30) : video.mozCaptureStream(30);
             currentStream.getTracks().forEach(track => pc.addTrack(track, currentStream));
 
@@ -94,17 +105,20 @@
                 ws.send(JSON.stringify({ type: 'state', playing: true }));
             }
         } catch (err) {
-            console.error('[VS Code Stream] Error:', err);
+            console.error('[VS Code Stream] Error al capturar stream:', err);
         }
     }
 
+    // Vigilante continuo: detecta si la música suena pero no hay transmisión activa
     function checkVideo() {
         const video = document.querySelector('video');
         if (!video) return;
 
-        const currentId = new URLSearchParams(location.search).get('v');
-        if (currentId && currentId !== lastVideoId && !video.paused) {
-            triggerStream();
+        const currentId = new URLSearchParams(location.search).get('v') || location.pathname;
+
+        // Si hay música sonando y cambió de tema O se perdió la conexión WebRTC, reconectar
+        if (!video.paused && (currentId !== lastVideoId || !pc || pc.connectionState === 'failed' || pc.connectionState === 'disconnected')) {
+            triggerStream(currentId !== lastVideoId);
         }
     }
 
@@ -116,9 +130,9 @@
             if (ws?.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'state', playing: true }));
             }
-            const currentId = new URLSearchParams(location.search).get('v');
-            if (currentId !== lastVideoId) {
-                triggerStream();
+            const currentId = new URLSearchParams(location.search).get('v') || location.pathname;
+            if (currentId !== lastVideoId || !pc) {
+                triggerStream(true);
             }
         }
     }, true);
